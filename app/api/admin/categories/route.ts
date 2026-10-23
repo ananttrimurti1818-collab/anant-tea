@@ -1,0 +1,18 @@
+import { requireAdmin } from "@/lib/admin-auth";
+import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/lib/db";
+export const dynamic = "force-dynamic";
+const text=(v:unknown)=>typeof v==="string"?v.trim():"";
+const slugify=(v:string)=>v.toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+export async function GET(){
+  const denied = await requireAdmin();
+  if (denied) return denied;try{const sql=db();const rows=await sql`SELECT c.id,c."name",c."slug",c.image,COUNT(p.id)::int product_count FROM "Category" c LEFT JOIN "Product" p ON p."categoryId"=c.id GROUP BY c.id,c."name",c."slug",c.image ORDER BY c."name"`;return NextResponse.json({categories:rows.map(r=>({id:String(r.id),name:String(r.name),slug:String(r.slug),image:r.image?String(r.image):"",productCount:Number(r.product_count??0)}))});}catch(e){console.error(e);return NextResponse.json({error:"Unable to load categories."},{status:500});}}
+export async function POST(req:NextRequest){
+  const denied = await requireAdmin();
+  if (denied) return denied;try{const b=await req.json(),name=text(b.name),slug=slugify(text(b.slug)||name),image=text(b.image)||null;if(!name)return NextResponse.json({error:"Category name is required."},{status:400});const sql=db();if(!slug)return NextResponse.json({error:"A valid category slug is required."},{status:400});const dup=await sql`SELECT id FROM "Category" WHERE lower(name)=lower(${name}) OR slug=${slug} LIMIT 1`;if(dup[0])return NextResponse.json({error:"A category with this name or slug already exists."},{status:409});const id=crypto.randomUUID();await sql`INSERT INTO "Category" (id,name,slug,image,"createdAt") VALUES (${id},${name},${slug},${image},CURRENT_TIMESTAMP)`;return NextResponse.json({category:{id,name,slug,image:image??"",productCount:0}},{status:201});}catch(e){console.error(e);return NextResponse.json({error:e instanceof Error?e.message:"Unable to create category."},{status:500});}}
+export async function PATCH(req:NextRequest){
+  const denied = await requireAdmin();
+  if (denied) return denied;try{const b=await req.json(),id=text(b.id),name=text(b.name),slug=slugify(text(b.slug)||name),image=text(b.image)||null;if(!id||!name)return NextResponse.json({error:"Category ID and name are required."},{status:400});const sql=db();if(!(await sql`SELECT id FROM "Category" WHERE id=${id}`)[0])return NextResponse.json({error:"Category not found."},{status:404});if((await sql`SELECT id FROM "Category" WHERE (lower(name)=lower(${name}) OR slug=${slug}) AND id<>${id} LIMIT 1`)[0])return NextResponse.json({error:"Another category already uses this name or slug."},{status:409});await sql`UPDATE "Category" SET name=${name},slug=${slug},image=${image} WHERE id=${id}`;return NextResponse.json({success:true});}catch(e){console.error(e);return NextResponse.json({error:e instanceof Error?e.message:"Unable to update category."},{status:500});}}
+export async function DELETE(req:NextRequest){
+  const denied = await requireAdmin();
+  if (denied) return denied;try{const {id}=await req.json();const categoryId=text(id);if(!categoryId)return NextResponse.json({error:"Category ID is required."},{status:400});const sql=db();const [{count}]=await sql`SELECT COUNT(*)::int count FROM "Product" WHERE "categoryId"=${categoryId}`;if(Number(count)>0)return NextResponse.json({error:"This category has products. Move those products first."},{status:409});const r=await sql`DELETE FROM "Category" WHERE id=${categoryId}`;if(!r.count)return NextResponse.json({error:"Category not found."},{status:404});return NextResponse.json({success:true});}catch(e){console.error(e);return NextResponse.json({error:e instanceof Error?e.message:"Unable to delete category."},{status:500});}}
